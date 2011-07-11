@@ -5,10 +5,8 @@ package lib
  */
 
 import java.util.concurrent.atomic.AtomicBoolean
-// import com.playad.log.LogEnabled
 import scala.reflect.Manifest
 import java.util.concurrent.{ Executors, ConcurrentLinkedQueue, ThreadFactory }
-// import com.playad.actors.Scheduler
 import scala.annotation.tailrec
 import scala.annotation.unchecked._
 
@@ -82,45 +80,6 @@ object Implicits {
   }
 }
 
-/*
-object Parallel {
-  import Implicits._
-
-  val nbProccessors = Runtime.getRuntime.availableProcessors + 1
-
-  implicit def parallelList[U](l : List[U]) = new {
-    def parallel = parallelWith(nbProccessors)
-
-    def parallelWith(nb : Int) = new {
-      def map[T](f : U => T) : Promise[List[T]] = {
-        val list = (l splitIn (scala.math.max(1, nb))) map {l => Promise.async{l map f}}
-        Promise.join(list) map {_.toList.flatMap {x => x}}
-      }
-      def flatMap[T](f : U => Iterable[T]) : Promise[List[T]] = {
-        val list = (l splitIn (scala.math.max(1, nb))) map {l => Promise.async{l flatMap f}}
-        Promise.join(list) map {_.toList.flatMap {x => x}}
-      }
-      def foreach[T](f : U => Unit) : Promise[Unit] = {
-        val list = (l splitIn (scala.math.max(1, nb))) map {l => Promise.async{l foreach f}}
-        Promise.join(list) map {x => }
-      }
-      def filter(pred : U => Boolean) : Promise[List[U]] = {
-        val list = (l splitIn (scala.math.max(1, nb))) map {l => Promise.async{l filter pred}}
-        Promise.join(list) map {_.toList.flatMap {x => x}}
-      }
-    }
-  }
-}
-
-object DebugHelper {
-  def logTrace[T](f : => T) = {
-    //    println("PROMISE/FUTURE: ", f)
-  }
-}
-
-import DebugHelper._
-*/
-
 /**
  * Ensure non blocking behavior.
  * Investigate atomic usage.
@@ -155,7 +114,6 @@ object Promise {
       case Right(p) => p
     }
   }
-//    Promise(p).flatMap[T, S]{x => x}
 
   def apply[T](): MutablePromise[T, PPending] = new StrictPromise[T]
   def apply[T](v: => T): Promise[T, PFulfilled] = {
@@ -197,33 +155,9 @@ object Promise {
         case p :: rest => p.async.flatMap { x => recJoin(rest, x :: acc) } // async acts as a trampoline
       }
     val proms = promises.distinct
-    Promise async { proms.foreach { _.isSet } } // make sure everything is loading..
+    Promise async { proms.foreach { _.isSet } } // make sure all lazy promises are triggered upfront..
     recJoin(proms, Nil)
   }
-
-  /**
-   * Helper to provide easy integration with for comprehensions.
-   */
-  /*
-  def projection[T](x : Promise[Option[T], _]) = PromProj(x)
-  case class PromProj[T](promise : Promise[Option[T], _]) {
-    def map[U](f : T => U) : PromProj[U] =
-      PromProj(
-        promise map {
-          case Some(x) => Some(f(x))
-          case _ => None
-        }
-        )
-
-    def flatMap[U](f : T => PromProj[U]) : PromProj[U] =
-      PromProj(
-        promise flatMap {
-          case Some(x) => f(x).promise
-          case _ => Promise[Option[U]](None)
-        }
-        )
-  }
-    */
 
   /**
    * Delays a promise by a certain amount of time.
@@ -410,10 +344,6 @@ final class PromiseProjection[+T, S <: PState](private val outer: Promise[T, S])
   type FinalRes[+a] = Option[a]
   type CurRes[+a] = Option[a]
 
-  //  final def either = new PromiseEitherProjection(outer)
-  //  final def either = outer.itt // we rely on implicit dispatch..
-  // new PromiseEitherProjection(outer)
-
   final def foreach(f: T => Unit): Unit =
     outer.foreachEither {
       case Right(x) => f(x)
@@ -438,14 +368,6 @@ final class PromiseProjection[+T, S <: PState](private val outer: Promise[T, S])
       case _ => false
     }
 
-  /*
-  final def now() : Option[T] =
-    outer.nowEither() match {
-      case Some(Right(v)) => Some(v)
-      case _ => None
-    }
-
-*/
   final def isSet: Boolean = outer.isSetEither
 
 }
@@ -740,13 +662,9 @@ abstract class FutureThreadPool(_name: String, _threadBaseName: String, _threadP
   def shutdown = _executor.shutdown
 }
 
-// import com.playad.utils.Utils
-
 object Future extends FutureThreadPool("FutureThreadPool", "future", {
-  val futureThreadPoolRatio = 1.0 // Utils.systemGetPropertyOrElse("futureThreadPoolRatio", "1.0").toFloat
-  // ThreadPoolSize must be > 2, to handle correctly inner call to objUnsafe inside newSpawn code
+  val futureThreadPoolRatio = 1.0
   scala.math.max(3, futureThreadPoolRatio * Runtime.getRuntime.availableProcessors).toInt
 }) {
-  // TODO This should probably be defined elsewhere
   val _IOexecutor = Executors.newFixedThreadPool(1, new FutureThreadFactory("io")).asInstanceOf[java.util.concurrent.ThreadPoolExecutor]
 }
