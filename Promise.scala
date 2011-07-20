@@ -38,8 +38,6 @@ object Promise {
   
   def failed[T] = empty
 
-  val emptyUpdating = { () => }
-
   def lazily[T](v: => Promise[T]): LazyPromise[T] = {
     lazy val prom: LazyPromise[T] = // lazy to solve initialisation order problem
       new LazyPromise[T](() => v foreachEither (prom setPromiseEither _))
@@ -54,14 +52,14 @@ object Promise {
     }
   }
 
-  def apply[T](): MutablePromise[T] = new StrictPromise[T]
-  def apply[T](v: => T): Promise[T] = Promise[T]().setPromise(v)
+  def apply[T](): MutablePromise[T] = new MutablePromise[T]
+  def apply[T](v: => T): Promise[T] = Promise[T]().set(v)
   
   def async[T](): AsyncPromise[T] = new AsyncPromise[T]
   def async[T](v: => T): AsyncPromise[T] = {
     val prom = async[T]()
     PromiseExec.newSpawn {
-      prom.setPromise(v)
+      prom.set(v)
     }
     prom
   }
@@ -85,52 +83,22 @@ object Promise {
     Promise[T]() fail e
 }
 
-final class StrictPromise[T] extends MutablePromise[T] {
 
-  final def setValueEither(ev: => Either[Throwable, _ <: T]): Promise[T] = {
-    try {
-      _value = Some(ev)
-    } catch {
-      case e: Throwable => _value = Some(Left(e)) // evaluation could throw
-    }
-    afterValueChanged
-  }
-}
+// final class StrictPromise[T] extends MutablePromise[T]
 
 final class AsyncPromise[T] extends MutablePromise[T] {
-
   override def foreachEither(f: Either[Throwable, T] => Unit): Unit =
     super.foreachEither { PromiseExec newSpawn f(_) }
-
-  final def setValueEither(ev: => Either[Throwable, _ <: T]) = {
-    try {  
-      _value = Some(ev) // evaluation could throw
-    } catch {
-      case e: Throwable => _value = Some(Left(e))
-    }
-    afterValueChanged
-  }
 }
 
 
 final class LazyPromise[T](var lazyAction: () => Unit) extends MutablePromise[T] {
 
-  // It set from lazily method so there's no need to worry.. ev thunk is wrapping an evaluated, pure, value (no exception will be thrown).
-  final def setValueEither(ev: => Either[Throwable, _ <: T]) = {
-    try {
-      _value = Some(ev)
-    } catch {
-      case e: Throwable =>
-        _value = Some(Left(e)) // even the evaluation of a failure can lead to another one (improbable base on upper comment).
-    }
-    afterValueChanged
-  }
-
   final def doLazyActionIfNeeded() = {
     if (lazyAction != null) synchronized { // narrowing test
       if (lazyAction != null) {
         val toEvaluate = lazyAction
-        lazyAction = null // we free the lazy thunk memory and prevent reentrant evaluation
+        lazyAction = null // we free the lazy thunk memory
         try {
           toEvaluate()
         } catch {
@@ -141,22 +109,44 @@ final class LazyPromise[T](var lazyAction: () => Unit) extends MutablePromise[T]
   }
 
   override def nowEither(): Option[Either[Throwable, T]] = {
-    doLazyActionIfNeeded()
+    doLazyActionIfNeeded() // the reason we've overrided nowEither; triggering lazy computation.
     super.nowEither()
   }
 }
 
 final case class DependencyCallBack[T](f: Either[Throwable, T] => _)
 
-abstract class MutablePromise[T] extends Promise[T] { self =>
-  @volatile
+class MutablePromise[T] extends Promise[T] {
+  private val _hookOnSet = new ConcurrentLinkedQueue[DependencyCallBack[T]]
+  
+  @volatile // may be accessed from different threads.
   var _value: Option[Either[Throwable, T]] = None
   
+  final def set(x: => T) = setPromiseEither(Right(x))
+  final def fail(ex: => Throwable) = setPromiseEither(Left(ex))
+
+
+  // Promise methods, may be overloaded in implementations to provide asynchronicity and lazyness 
   def nowEither(): Option[Either[Throwable, T]] = _value
+  def foreachEither(f: Either[Throwable, T] => Unit): Unit = {
+    _hookOnSet offer DependencyCallBack(f)
+    propagate()
+  }
 
-  private val _hookOnSet = new ConcurrentLinkedQueue[DependencyCallBack[T]]
+  final def setPromiseEither(ev: => Either[Throwable, _ <: T]) = {
+    try {  
+      _value = Some(ev) // evaluation could throw
+    } catch {
+      case e: Throwable => _value = Some(Left(e))
+    }
+    synchronized {
+      notifyAll()
+    }
+    propagate()
+    this
+  }
 
-  final protected def propagate(): Unit =
+  final def propagate(): Unit =
     nowEither() match {
       case Some(finalValue) =>
         @tailrec
@@ -178,34 +168,8 @@ abstract class MutablePromise[T] extends Promise[T] { self =>
         internPropagate
       case _ =>
     }
-
-  /**
-   * exclusively by default
-   */
-  protected def setValueEither(ev: => Either[Throwable, _ <: T]): Promise[_ <: T]
-
-  final def setPromiseEither(ei: => Either[Throwable, _ <: T]) = setValueEither(ei)
-  final def fail(ex: => Throwable) = setValueEither(Left(ex))
-  final def setPromise(x: => T) = setValueEither(Right(x))
-
-  def foreachEither(f: Either[Throwable, T] => Unit): Unit = {
-    _hookOnSet offer DependencyCallBack(f)
-    propagate()
-  }
-
-  /**
-   * Triggered when the value has Been set; notify all blocking threads and propagate. 
-   */
-  final protected def afterValueChanged() = {
-    synchronized {
-      notifyAll()
-    }
-    propagate()
-    this
-  }
-
+ 
 }
-
 
 
 final class PromiseIsMonadPlus[+T](private val outer: Promise[T]) {
@@ -278,7 +242,7 @@ final class PromiseCanExposeFailure[+T](outer: Promise[T]) {
    */
   def liftEither: Promise[Either[Throwable, T]] = {
     val prom = Promise[Either[Throwable, T]]()
-    outer.foreachEither { prom setPromise _ }
+    outer.foreachEither { prom set _ }
     prom
   }
 }
@@ -306,7 +270,7 @@ final class PromiseCombinators[+T](outer: Promise[T]) {
       case Right(t) =>
         try {
           other.foreachEither {
-            case Right(u) => prom.setPromise((t, u))
+            case Right(u) => prom.set((t, u))
             case Left(err) => prom.setPromiseEither(Left(err)) // we're abusing the compiler here to do not recreate a Left exception value
           }
         } catch {
@@ -418,11 +382,6 @@ abstract class Promise[+T] {
 }
 
 
-abstract class PromiseComputation[T] {
-  def function: T
-  override def toString = "Spawned Promise"
-}
-
 class PromiseThreadFactory(threadGroupName: String) extends ThreadFactory {
   import java.util.concurrent.atomic.AtomicInteger
 
@@ -443,16 +402,14 @@ abstract class PromiseThreadPool(_name: String, _threadBaseName: String, _thread
 
   val _executor = Executors.newFixedThreadPool(_threadPoolSize, new PromiseThreadFactory(_threadBaseName)).asInstanceOf[java.util.concurrent.ThreadPoolExecutor]
 
-  def newSpawn[T](_function: => T): PromiseComputation[T] = {
-    val b =
-      new PromiseComputation[T] with Runnable { self =>
-        def function = _function
+  def newSpawn[T](_function: => T) {
+    _executor.execute(
+       new Runnable {
         def run() = try {
-          function
+          _function
         } catch { case e => /*put logging here*/ }
-      }
-    _executor.execute(b)
-    b
+      }    
+    )
   }
 
   def shutdown = _executor.shutdown
