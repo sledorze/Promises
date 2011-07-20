@@ -78,25 +78,11 @@ object Promise {
     prom
   }
 
-  def either[T](ei: => Either[Throwable, T]): Promise[T] = {
+  def either[T](ei: => Either[Throwable, T]): Promise[T] =
     Promise[T]() setPromiseEither ei
-  }
 
-  final def failure[T](e: => Throwable): Promise[T] = {
+  final def failure[T](e: => Throwable): Promise[T] =
     Promise[T]() fail e
-  }
-/*
-  def join[U](promises: List[Promise[U]]): Promise[List[U]] = {
-    def recJoin(l: List[Promise[U]], acc: List[U]): Promise[List[U]] =
-      l match {
-        case Nil => Promise(acc.reverse)
-        case p :: rest => p.async.flatMap { x => recJoin(rest, x :: acc) } // async acts as a trampoline
-      }
-    val proms = promises.distinct
-    Promise async { proms.foreach { _.nowEither } } // make sure all lazy promises are triggered upfront..
-    recJoin(proms, Nil)
-  }
-  */
 }
 
 final class StrictPromise[T] extends MutablePromise[T] {
@@ -105,7 +91,7 @@ final class StrictPromise[T] extends MutablePromise[T] {
     try {
       _value = Some(ev)
     } catch {
-      case e: Throwable => _value = Some(Left(e)) // even the evaluation of a failure can lead to another one.
+      case e: Throwable => _value = Some(Left(e)) // evaluation could throw
     }
     afterValueChanged
   }
@@ -117,8 +103,8 @@ final class AsyncPromise[T] extends MutablePromise[T] {
     super.foreachEither { PromiseExec newSpawn f(_) }
 
   final def setValueEither(ev: => Either[Throwable, _ <: T]) = {
-    try {  // even the evaluation of a failure can lead to another one.
-      _value = Some(ev)
+    try {  
+      _value = Some(ev) // evaluation could throw
     } catch {
       case e: Throwable => _value = Some(Left(e))
     }
@@ -434,7 +420,7 @@ abstract class Promise[+T] {
 
 abstract class PromiseComputation[T] {
   def function: T
-  override def toString = "Spawned Future"
+  override def toString = "Spawned Promise"
 }
 
 class PromiseThreadFactory(threadGroupName: String) extends ThreadFactory {
