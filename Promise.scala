@@ -45,7 +45,7 @@ object Promise {
   }
 
   def flat[T](p : => Promise[T]) : Promise[T] = {
-    val prom = Promise(p)
+    val prom = Promise(p)  
     prom.flatMapEither {
       case Left(err) => prom.asInstanceOf[Promise[T]] // safe abuse for speed here: a Left(err) is a Left(err) even if its real type is Promise[Promise[T]] or Promise[T]
       case Right(p) => p
@@ -290,15 +290,15 @@ final class PromiseCombinators[+T](outer: Promise[T]) {
 
   def or[U >: T](other: Promise[U]): Promise[U] = {
     val prom = Promise[U]()
-    val status = new java.util.concurrent.atomic.AtomicInteger(0) // 0 -> not set, 1 -> value set (right), 2 -> one error (left)
+    val status = new java.util.concurrent.atomic.AtomicInteger(0) // 0 -> not set, 2 -> value set (right), 1 -> one error (left)
 
     val updateAsNeeded: Either[Throwable, U] => Unit = {
       case r: Right[_, _] =>
-        if (!status.compareAndSet(1, 1)) {
+        if (status.getAndSet(2) < 2) { 
           prom.setPromiseEither(r)
         }
       case l: Left[_, _] =>
-        if (status.compareAndSet(2, 2)) { // we only want to write if we are the second error
+        if (status.getAndSet(1) == 1) { ///we only want to write if we are the second error
           prom.setPromiseEither(l)
         }
     }
