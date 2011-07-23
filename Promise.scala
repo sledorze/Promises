@@ -58,9 +58,7 @@ object Promise {
   def async[T](): AsyncPromise[T] = new AsyncPromise[T]
   def async[T](v: => T): AsyncPromise[T] = {
     val prom = async[T]()
-    PromiseExec.newSpawn {
-      prom.set(v)
-    }
+    PromiseExec.newSpawn {prom.set(v)}
     prom
   }
 
@@ -84,8 +82,6 @@ object Promise {
 }
 
 
-// final class StrictPromise[T] extends MutablePromise[T]
-
 final class AsyncPromise[T] extends MutablePromise[T] {
   override def foreachEither(f: Either[Throwable, T] => Unit): Unit =
     super.foreachEither { PromiseExec newSpawn f(_) }
@@ -94,7 +90,7 @@ final class AsyncPromise[T] extends MutablePromise[T] {
 
 final class LazyPromise[T](var lazyAction: () => Unit) extends MutablePromise[T] {
 
-  final def doLazyActionIfNeeded() = {
+  final def doLazyActionIfRequiered() = {
     if (lazyAction != null) synchronized { // narrowing test
       if (lazyAction != null) {
         val toEvaluate = lazyAction
@@ -102,37 +98,33 @@ final class LazyPromise[T](var lazyAction: () => Unit) extends MutablePromise[T]
         try {
           toEvaluate()
         } catch {
-          case e => _value = Some(Left(e))
+          case e => _value = Some(Left(e)) // fail(e) not necessary
         }
       }
     }
   }
 
   override def nowEither(): Option[Either[Throwable, T]] = {
-    doLazyActionIfNeeded() // the reason we've overrided nowEither; triggering lazy computation.
+    doLazyActionIfRequiered() // the reason we've overrided nowEither; triggering lazy computation.
     super.nowEither()
   }
 }
 
-final case class DependencyCallBack[T](f: Either[Throwable, T] => _)
-
 class MutablePromise[T] extends Promise[T] {
-  private val _hookOnSet = new ConcurrentLinkedQueue[DependencyCallBack[T]]
+
+  private val _callBacks = new ConcurrentLinkedQueue[Either[Throwable, T] => Unit]
   
   @volatile // may be accessed from different threads.
-  var _value: Option[Either[Throwable, T]] = None
+  protected var _value: Option[Either[Throwable, T]] = None
   
-  final def set(x: => T) = setPromiseEither(Right(x))
-  final def fail(ex: => Throwable) = setPromiseEither(Left(ex))
-
-
-  // Promise methods, may be overloaded in implementations to provide asynchronicity and lazyness 
   def nowEither(): Option[Either[Throwable, T]] = _value
   def foreachEither(f: Either[Throwable, T] => Unit): Unit = {
-    _hookOnSet offer DependencyCallBack(f)
+    _callBacks offer f
     propagate()
   }
 
+  final def set(x: => T) = setPromiseEither(Right(x))
+  final def fail(ex: => Throwable) = setPromiseEither(Left(ex))
   final def setPromiseEither(ev: => Either[Throwable, _ <: T]) = {
     try {  
       _value = Some(ev) // evaluation could throw
@@ -146,17 +138,17 @@ class MutablePromise[T] extends Promise[T] {
     this
   }
 
-  final def propagate(): Unit =
+  protected def propagate(): Unit =
     nowEither() match {
       case Some(finalValue) =>
         @tailrec
         def internPropagate: Unit = {
           var finished = false;
           try {
-            var elem = _hookOnSet.poll()
+            var elem = _callBacks.poll()
             while (elem != null) {
-              elem f finalValue
-              elem = _hookOnSet.poll()
+              elem.apply(finalValue)
+              elem = _callBacks.poll()
             }
             finished = true;
           } catch {
@@ -170,7 +162,6 @@ class MutablePromise[T] extends Promise[T] {
     }
  
 }
-
 
 final class PromiseIsMonadPlus[+T](private val outer: Promise[T]) {
 
@@ -374,7 +365,6 @@ final class PromiseCanBeUnsafe[+T](outer: Promise[T]) {
 
   final def waitAndGet() = waitFulfilled().now()
 }
-
 
 abstract class Promise[+T] {
   def foreachEither(f: Either[Throwable, T] => Unit): Unit
