@@ -1,3 +1,5 @@
+package com.mindrocksstudio.concurrent
+
 import java.util.concurrent.atomic.AtomicBoolean
 import scala.reflect.Manifest
 import java.util.concurrent.{ Executors, ConcurrentLinkedQueue, ThreadFactory }
