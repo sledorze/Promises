@@ -6,6 +6,7 @@ import java.util.concurrent.{ Executors, ConcurrentLinkedQueue, ThreadFactory }
 import scala.annotation.tailrec
 import scala.annotation.unchecked._
 
+
 object PromiseImplicits {
 
   implicit def toMonadPlus[T](p: Promise[T]) = new PromiseIsMonadPlus(p)
@@ -277,8 +278,6 @@ final class PromiseCombinators[+T](outer: Promise[T]) {
   /**
    * Returns a promise whose value equals to the first promise fulfilled exactly when it is fulfilled.
    * Returns a failure if both fail (with the last one failure; TODO provide a mean to combine Failures)
-   * ex:
-   *   connector.connect(inetAddr).toProm() or (Promise.failed[IoSession].delayed(timeout))
    */
 
   def or[U >: T](other: Promise[U]): Promise[U] = {
