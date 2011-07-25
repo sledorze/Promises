@@ -315,6 +315,38 @@ class PromiseSpec extends Specification {
 	    testCombinator(errorA, errorB, combineOr, Some(errorA), true)
     }
     
+    "lazy promise defer evaluation and act as a normal promise" in {
+      var evidence = 0
+      val prom = Promise("at time " + evidence).lazily
+      evidence = 1
+      prom.waitAndGet() mustEqual Some("at time 1")      
+    }
+
+    "lazy promise defer evaluation of Promise chain and act as a normal promise" in {
+      var evidence = 0
+      val prom = Promise("at time " + evidence).map{x => x}.lazily
+      evidence = 1
+      prom.waitAndGet() mustEqual Some("at time 1")      
+    }
+    
+    "Promise catch exceptions" in {
+      val exception = new Exception("error")      
+      val prom = Promise(5)
+      val res = prom.map{x => throw exception; x + x}
+      
+      res.waitUntil(100)
+      res.nowEither() mustEqual Some(Left(exception))
+    }
+
+    "async Promise catch exceptions" in {
+      val exception = new Exception("error")      
+      var prom = Promise.async(5)
+      var res = prom.map{x => throw exception; x + x}
+      
+      res.waitUntil(100)
+      res.nowEither() mustEqual Some(Left(exception))
+    }
+    
   }
 }
 

@@ -12,7 +12,7 @@ object PromiseImplicits {
   implicit def toMonadPlus[T](p: Promise[T]) = new PromiseIsMonadPlus(p)
 
   implicit def toAsync[T](p: Promise[T]) = new PromiseIsAsynchronous(p)
-  implicit def toLazy[T](p: Promise[T]) = new PromiseIsLazy(p)  
+  implicit def toLazy[T](p: => Promise[T]) = new PromiseIsLazy(p)  
 
   implicit def toAbstractFailure[T](p: Promise[Either[Throwable, T]]) = new PromiseCanAbstractFailure(p)
   implicit def toExposeFailure[T](p: Promise[T]) = new PromiseCanExposeFailure(p)
@@ -82,7 +82,9 @@ object Promise {
 
 final class AsyncPromise[T] extends MutablePromise[T] {
   override def foreachEither(f: Either[Throwable, T] => Unit): Unit =
-    super.foreachEither { PromiseExec newSpawn f(_) }
+    super.foreachEither {
+	  PromiseExec newSpawn f(_)
+	}
 }
 
 
@@ -202,7 +204,6 @@ final class PromiseIsLazy[+T](outer: => Promise[T]) {
     prom
   }
 }
-
 
 final class PromiseIsAsynchronous[+T](outer: Promise[T]) {
 
