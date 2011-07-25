@@ -12,6 +12,7 @@ object PromiseImplicits {
   implicit def toMonadPlus[T](p: Promise[T]) = new PromiseIsMonadPlus(p)
 
   implicit def toAsync[T](p: Promise[T]) = new PromiseIsAsynchronous(p)
+  implicit def toLazy[T](p: Promise[T]) = new PromiseIsLazy(p)  
 
   implicit def toAbstractFailure[T](p: Promise[Either[Throwable, T]]) = new PromiseCanAbstractFailure(p)
   implicit def toExposeFailure[T](p: Promise[T]) = new PromiseCanExposeFailure(p)
@@ -40,12 +41,6 @@ object Promise {
   val empty = Promise.failure(undefined)
   
   def failed[T] = empty
-
-  def lazily[T](v: => Promise[T]): LazyPromise[T] = {
-    lazy val prom: LazyPromise[T] = // lazy to solve initialisation order problem
-      new LazyPromise[T](() => v foreachEither (prom setPromiseEither _))
-    prom
-  }
 
   def flat[T](p : => Promise[T]) : Promise[T] = {
     val prom = Promise(p)  
@@ -96,10 +91,10 @@ final class LazyPromise[T](var lazyAction: () => Unit) extends MutablePromise[T]
   final def doLazyActionIfRequiered() = {
     if (lazyAction != null) synchronized { // narrowing test
       if (lazyAction != null) {
-        val toEvaluate = lazyAction
+        val actionToEvaluate = lazyAction
         lazyAction = null // we free the lazy thunk memory
         try {
-          toEvaluate()
+          actionToEvaluate()
         } catch {
           case e => _value = Some(Left(e)) // fail(e) not necessary
         }
@@ -199,6 +194,15 @@ final class PromiseIsMonadPlus[+T](private val outer: Promise[T]) {
     }
 
 }
+
+final class PromiseIsLazy[+T](outer: => Promise[T]) {
+  def lazily : Promise[T] = {
+    lazy val prom: LazyPromise[T] = // lazy to solve initialisation order problem
+      new LazyPromise[T](() => outer foreachEither (prom setPromiseEither _))
+    prom
+  }
+}
+
 
 final class PromiseIsAsynchronous[+T](outer: Promise[T]) {
 
